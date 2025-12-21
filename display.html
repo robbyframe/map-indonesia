@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Indonesia Map - Location Tracker</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: transparent;
+            overflow: hidden;
+        }
+
+        #map {
+            width: 100vw;
+            height: 100vh;
+            background: transparent;
+        }
+
+        .leaflet-container {
+            background: transparent !important;
+        }
+
+        /* Make ocean/water transparent for OBS */
+        .leaflet-tile-pane {
+            filter: brightness(1.1) contrast(0.9);
+        }
+
+        /* Additional transparency for water areas */
+        .leaflet-tile {
+            opacity: 0.95;
+        }
+
+        /* Loading indicator */
+        .loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 30px 50px;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+            font-size: 18px;
+            font-weight: 600;
+            color: #FF5252;
+            z-index: 9999;
+        }
+
+        .loading.hidden {
+            display: none;
+        }
+
+        /* Reset button */
+        .controls {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+        }
+
+        .btn-reset {
+            background: #FF5252;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(255, 82, 82, 0.3);
+            transition: all 0.3s ease;
+        }
+
+        .btn-reset:hover {
+            background: #E64545;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(255, 82, 82, 0.4);
+        }
+
+        /* City markers */
+        .city-marker {
+            background: #FF0000;
+            border: 2px solid #FFFFFF;
+            border-radius: 50%;
+            box-shadow: 0 2px 8px rgba(255, 0, 0, 0.4);
+            transition: all 0.3s ease;
+        }
+
+        .city-marker.pulse {
+            animation: pulse 0.6s ease-out;
+        }
+
+        @keyframes pulse {
+            0% {
+                transform: scale(1);
+                opacity: 1;
+            }
+            50% {
+                transform: scale(1.3);
+                opacity: 0.7;
+            }
+            100% {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+
+        /* Popup styling */
+        .leaflet-popup-content-wrapper {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 3px 14px rgba(0,0,0,0.3);
+        }
+
+        .popup-city {
+            font-weight: 700;
+            font-size: 16px;
+            color: #333;
+            margin-bottom: 4px;
+        }
+
+        .popup-count {
+            font-size: 14px;
+            color: #FF5252;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <div class="loading" id="loading">⏳ Loading Map...</div>
+    
+    <div class="controls">
+        <button class="btn-reset" id="btnReset">🗑️ Reset Map</button>
+    </div>
+
+    <div id="map"></div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <!-- Supabase JS -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+    <script>
+        console.log('🗺️ Map Display Starting...');
+
+        // Get Room ID from URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const roomId = urlParams.get('room');
+
+        if (!roomId) {
+            console.warn('⚠️ No Room ID provided - map will display but no data will load');
+        } else {
+            console.log('✅ Room ID:', roomId);
+        }
+
+        // Check Leaflet
+        if (typeof L === 'undefined') {
+            document.getElementById('loading').innerHTML = '❌ Leaflet library failed to load';
+            throw new Error('Leaflet not loaded');
+        }
+        console.log('✅ Leaflet loaded');
+
+        // Initialize map
+        const map = L.map('map', {
+            zoomControl: true,
+            attributionControl: false
+        }).setView([-2.5, 118], 5);
+        console.log('✅ Map container created');
+
+        // Add tiles - WHITE THEME for transparency
+        const tileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+            maxZoom: 19,
+            subdomains: 'abcd',
+            attribution: 'CartoDB'
+        });
+
+        let tilesLoaded = false;
+        tileLayer.on('tileload', function() {
+            if (!tilesLoaded) {
+                tilesLoaded = true;
+                console.log('✅ Map tiles loaded (white theme)');
+                document.getElementById('loading').classList.add('hidden');
+            }
+        });
+
+        tileLayer.on('tileerror', function(error) {
+            console.warn('⚠️ CartoDB tiles failed, trying OpenStreetMap fallback...');
+            // Fallback to OpenStreetMap if CartoDB fails
+            map.removeLayer(tileLayer);
+            const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                attribution: 'OpenStreetMap'
+            });
+            osmLayer.on('tileload', function() {
+                if (!tilesLoaded) {
+                    tilesLoaded = true;
+                    console.log('✅ Map tiles loaded (OSM fallback)');
+                    document.getElementById('loading').classList.add('hidden');
+                }
+            });
+            osmLayer.addTo(map);
+        });
+
+        tileLayer.addTo(map);
+
+        // Markers storage
+        const markers = {};
+
+        // Marker size based on votes
+        function getMarkerSize(count) {
+            if (count === 1) return 20;
+            if (count <= 4) return 30;
+            if (count <= 9) return 45;
+            if (count <= 19) return 65;
+            return 95;
+        }
+
+        // Create marker
+        function createMarker(lat, lng, cityDisplay, voteCount) {
+            const size = getMarkerSize(voteCount);
+            
+            const icon = L.divIcon({
+                className: 'city-marker',
+                html: '',
+                iconSize: [size, size],
+                iconAnchor: [size/2, size/2]
+            });
+
+            const marker = L.marker([lat, lng], { icon })
+                .addTo(map)
+                .bindPopup(`
+                    <div class="popup-city">${cityDisplay}</div>
+                    <div class="popup-count">${voteCount} vote${voteCount > 1 ? 's' : ''}</div>
+                `);
+
+            return marker;
+        }
+
+        // Update marker
+        function updateMarker(cityName, voteCount) {
+            const marker = markers[cityName];
+            if (marker) {
+                const size = getMarkerSize(voteCount);
+                
+                const icon = L.divIcon({
+                    className: 'city-marker pulse',
+                    html: '',
+                    iconSize: [size, size],
+                    iconAnchor: [size/2, size/2]
+                });
+                
+                marker.setIcon(icon);
+                marker.setPopupContent(`
+                    <div class="popup-city">${marker.cityDisplay}</div>
+                    <div class="popup-count">${voteCount} vote${voteCount > 1 ? 's' : ''}</div>
+                `);
+
+                setTimeout(() => {
+                    const icon = L.divIcon({
+                        className: 'city-marker',
+                        html: '',
+                        iconSize: [size, size],
+                        iconAnchor: [size/2, size/2]
+                    });
+                    marker.setIcon(icon);
+                }, 600);
+
+                console.log(`📈 Updated: ${cityName} → ${voteCount} votes`);
+            }
+        }
+
+        // Supabase setup (only if room ID provided)
+        if (roomId && typeof window.supabase !== 'undefined') {
+            const SUPABASE_URL = 'https://qeoszqrunkgqkoolqbpa.supabase.co';
+            const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFlb3N6cXJ1bmtncWtvb2xxYnBhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ2MDQzMTgsImV4cCI6MjA4MDE4MDMxOH0.h_Xnid8Jnnmi-yr3YraB-I9GhTX-H6b9952hO90Mqxg';
+
+            const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+            console.log('✅ Supabase initialized');
+
+            // Load existing votes
+            async function loadVotes() {
+                try {
+                    const { data, error } = await supabase
+                        .from('map_votes')
+                        .select('*')
+                        .eq('room_id', roomId);
+
+                    if (error) throw error;
+
+                    console.log(`📊 Loaded ${data.length} existing votes`);
+
+                    data.forEach(vote => {
+                        const marker = createMarker(
+                            vote.latitude,
+                            vote.longitude,
+                            vote.city_display,
+                            vote.vote_count
+                        );
+                        marker.cityDisplay = vote.city_display;
+                        markers[vote.city_name] = marker;
+                    });
+                } catch (error) {
+                    console.error('❌ Error loading votes:', error);
+                }
+            }
+
+            // Real-time updates with polling
+            function subscribeToUpdates() {
+                // Supabase Realtime
+                const channel = supabase
+                    .channel('map-updates')
+                    .on(
+                        'postgres_changes',
+                        {
+                            event: '*',
+                            schema: 'public',
+                            table: 'map_votes',
+                            filter: `room_id=eq.${roomId}`
+                        },
+                        (payload) => {
+                            console.log('🔄 Real-time update:', payload);
+
+                            if (payload.eventType === 'INSERT') {
+                                const vote = payload.new;
+                                const marker = createMarker(
+                                    vote.latitude,
+                                    vote.longitude,
+                                    vote.city_display,
+                                    vote.vote_count
+                                );
+                                marker.cityDisplay = vote.city_display;
+                                markers[vote.city_name] = marker;
+                            } else if (payload.eventType === 'UPDATE') {
+                                const vote = payload.new;
+                                updateMarker(vote.city_name, vote.vote_count);
+                            } else if (payload.eventType === 'DELETE') {
+                                const cityName = payload.old.city_name;
+                                if (markers[cityName]) {
+                                    map.removeLayer(markers[cityName]);
+                                    delete markers[cityName];
+                                }
+                            }
+                        }
+                    )
+                    .subscribe();
+
+                console.log('✅ Realtime subscribed');
+
+                // Polling fallback
+                let lastCheckTime = new Date();
+                setInterval(async () => {
+                    try {
+                        const { data, error } = await supabase
+                            .from('map_votes')
+                            .select('*')
+                            .eq('room_id', roomId)
+                            .gte('updated_at', lastCheckTime.toISOString());
+                        
+                        if (error) throw error;
+                        
+                        if (data && data.length > 0) {
+                            console.log(`🔄 Poll found ${data.length} updates`);
+                            data.forEach(vote => {
+                                if (markers[vote.city_name]) {
+                                    updateMarker(vote.city_name, vote.vote_count);
+                                } else {
+                                    const marker = createMarker(
+                                        vote.latitude,
+                                        vote.longitude,
+                                        vote.city_display,
+                                        vote.vote_count
+                                    );
+                                    marker.cityDisplay = vote.city_display;
+                                    markers[vote.city_name] = marker;
+                                }
+                            });
+                        }
+                        
+                        lastCheckTime = new Date();
+                    } catch (error) {
+                        console.error('❌ Poll error:', error);
+                    }
+                }, 1000);
+            }
+
+            // Reset button
+            document.getElementById('btnReset').addEventListener('click', async () => {
+                if (!confirm('🗑️ Reset all markers for this room?')) return;
+                
+                try {
+                    const { error } = await supabase
+                        .from('map_votes')
+                        .delete()
+                        .eq('room_id', roomId);
+
+                    if (error) throw error;
+
+                    Object.keys(markers).forEach(cityName => {
+                        if (markers[cityName]) {
+                            map.removeLayer(markers[cityName]);
+                            delete markers[cityName];
+                        }
+                    });
+
+                    console.log('✅ Map reset');
+                    alert('✅ Map reset successfully!');
+                } catch (error) {
+                    console.error('❌ Reset error:', error);
+                    alert('❌ Error: ' + error.message);
+                }
+            });
+
+            // Initialize
+            loadVotes();
+            subscribeToUpdates();
+        } else {
+            console.log('ℹ️ Running in display-only mode (no room ID or Supabase)');
+        }
+
+        console.log('✅ Map initialized successfully');
+    </script>
+</body>
+</html>
